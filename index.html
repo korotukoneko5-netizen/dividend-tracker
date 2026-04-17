@@ -2,13 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#4f8cff">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="配当Tracker">
-<link rel="manifest" href="manifest.json">
-<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>高配当株トラッカー</title>
 <style>
 :root {
@@ -1075,6 +1069,7 @@ header h1 span {
       <button class="btn btn-icon" onclick="document.getElementById('import-data-file').click()" title="データ復元">&#x1F4C2;</button>
       <input type="file" id="import-data-file" accept=".json" style="display:none" onchange="importDataFile(event)">
       <button class="btn btn-icon" onclick="showQRShare()" title="スマホにQR共有">&#x1F4F1;</button>
+      <button class="btn btn-icon" onclick="showGistSync()" title="クラウド同期">&#x2601;</button>
     </div>
   </header>
 
@@ -1255,6 +1250,41 @@ header h1 span {
     </div>
   </div>
   <button class="sd-nav-btn sd-nav-next" onclick="navigateStockDetail(1)" title="次の銘柄">&#x25B6;</button>
+</div>
+
+<!-- Gist同期モーダル -->
+<div class="modal-overlay" id="gist-modal">
+  <div class="modal" style="max-width:500px">
+    <h2>&#x2601; クラウド同期（GitHub Gist）</h2>
+    <div id="gist-status" style="padding:10px;background:var(--bg2);border-radius:8px;font-size:0.8rem;margin-bottom:16px"></div>
+
+    <div class="form-group">
+      <label>GitHub Personal Access Token（gistスコープ）</label>
+      <input id="gist-token" type="password" placeholder="ghp_xxxxxxxxxxxx">
+      <div style="font-size:0.72rem;color:var(--text3);margin-top:4px">
+        <a href="https://github.com/settings/tokens/new?description=dividend-tracker-sync&scopes=gist" target="_blank" style="color:var(--accent)">→ トークン生成ページを開く</a>（scopeは「gist」のみでOK）
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Gist ID（空欄で新規作成／既存IDで接続）</label>
+      <input id="gist-id" type="text" placeholder="新規なら空欄のまま">
+    </div>
+
+    <div class="form-actions" style="flex-wrap:wrap;gap:8px">
+      <button class="btn btn-secondary" onclick="document.getElementById('gist-modal').classList.remove('active')">閉じる</button>
+      <button class="btn btn-primary" onclick="gistSaveSettings()">設定保存</button>
+      <button class="btn btn-primary" onclick="gistPush()" style="background:#059669">&#x2B06; アップロード</button>
+      <button class="btn btn-primary" onclick="gistPull()" style="background:#dc2626">&#x2B07; ダウンロード</button>
+    </div>
+
+    <div style="font-size:0.72rem;color:var(--text3);margin-top:16px;line-height:1.6;border-top:1px solid var(--surface2);padding-top:12px">
+      <strong>使い方:</strong><br>
+      1. PC: トークンを入力 → 設定保存 → アップロード（Gist IDが自動発行される）<br>
+      2. スマホ: 同じトークンを入力 + PC側で表示されたGist IDを入力 → 設定保存 → ダウンロード<br>
+      3. 以降は「アップロード/ダウンロード」でPC↔スマホ間の同期
+    </div>
+  </div>
 </div>
 
 <!-- QR共有モーダル -->
@@ -3492,6 +3522,148 @@ function decompressData(b64) {
   };
 }
 
+// ===== GitHub Gist 同期 =====
+const GIST_SETTINGS_KEY = 'dividend_tracker_gist';
+
+function loadGistSettings() {
+  try { return JSON.parse(localStorage.getItem(GIST_SETTINGS_KEY) || '{}'); } catch(e) { return {}; }
+}
+function saveGistSettings(s) { localStorage.setItem(GIST_SETTINGS_KEY, JSON.stringify(s)); }
+
+function showGistSync() {
+  const s = loadGistSettings();
+  document.getElementById('gist-token').value = s.token || '';
+  document.getElementById('gist-id').value = s.gistId || '';
+  updateGistStatus();
+  document.getElementById('gist-modal').classList.add('active');
+}
+
+function updateGistStatus() {
+  const s = loadGistSettings();
+  const statusEl = document.getElementById('gist-status');
+  if (!s.token) {
+    statusEl.innerHTML = '<span style="color:var(--text3)">未設定（トークンを入力してください）</span>';
+  } else if (!s.gistId) {
+    statusEl.innerHTML = '<span style="color:var(--yellow)">トークン設定済み（Gist未作成）</span>';
+  } else {
+    statusEl.innerHTML = `<span style="color:var(--green)">✓ 接続済み</span><br><span style="color:var(--text3);font-size:0.7rem">Gist ID: ${s.gistId}</span>`;
+    if (s.lastSync) statusEl.innerHTML += `<br><span style="color:var(--text3);font-size:0.7rem">最終同期: ${new Date(s.lastSync).toLocaleString('ja-JP')}</span>`;
+  }
+}
+
+function gistSaveSettings() {
+  const token = document.getElementById('gist-token').value.trim();
+  const gistId = document.getElementById('gist-id').value.trim();
+  const s = loadGistSettings();
+  s.token = token;
+  s.gistId = gistId;
+  saveGistSettings(s);
+  updateGistStatus();
+  showToast('設定を保存しました');
+}
+
+async function gistPush() {
+  const s = loadGistSettings();
+  if (!s.token) { showToast('トークンを入力してください'); return; }
+
+  showLoading(true, 'クラウドへアップロード中...');
+  try {
+    const content = JSON.stringify(appData, null, 2);
+    const filename = 'dividend-tracker-data.json';
+    const description = '高配当株トラッカー データ';
+
+    let url, method;
+    if (s.gistId) {
+      url = `https://api.github.com/gists/${s.gistId}`;
+      method = 'PATCH';
+    } else {
+      url = 'https://api.github.com/gists';
+      method = 'POST';
+    }
+
+    const body = {
+      description,
+      public: false,
+      files: { [filename]: { content } },
+    };
+
+    const resp = await fetch(url, {
+      method,
+      headers: {
+        'Authorization': `token ${s.token}`,
+        'Accept': 'application/vnd.github.v3+json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.text();
+      throw new Error(`HTTP ${resp.status}: ${err.substring(0, 200)}`);
+    }
+
+    const result = await resp.json();
+    s.gistId = result.id;
+    s.lastSync = Date.now();
+    saveGistSettings(s);
+    document.getElementById('gist-id').value = result.id;
+    updateGistStatus();
+    showLoading(false);
+    showToast(`アップロード完了！Gist ID: ${result.id.substring(0, 8)}...`);
+  } catch(e) {
+    showLoading(false);
+    alert('アップロード失敗:\n' + e.message + '\n\nトークンの権限(gist)とネットワークを確認してください。');
+  }
+}
+
+async function gistPull() {
+  const s = loadGistSettings();
+  if (!s.token || !s.gistId) { showToast('トークンとGist IDを入力してください'); return; }
+
+  showLoading(true, 'クラウドからダウンロード中...');
+  try {
+    const resp = await fetch(`https://api.github.com/gists/${s.gistId}`, {
+      headers: {
+        'Authorization': `token ${s.token}`,
+        'Accept': 'application/vnd.github.v3+json',
+      },
+    });
+
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const result = await resp.json();
+    const file = result.files['dividend-tracker-data.json'];
+    if (!file) throw new Error('データファイルが見つかりません');
+
+    const remoteData = JSON.parse(file.content);
+    const pCount = (remoteData.portfolio || []).length;
+    const wCount = (remoteData.watchlist || []).length;
+
+    showLoading(false);
+    if (confirm(`クラウドから取得しました:\n保有株: ${pCount}件\nウォッチリスト: ${wCount}件\n\n現在のデータを上書きしてインポートしますか？`)) {
+      appData = remoteData;
+      saveData(appData);
+      s.lastSync = Date.now();
+      saveGistSettings(s);
+      renderAll();
+      updateGistStatus();
+      showToast(`ダウンロード完了（保有株${pCount}件 / WL${wCount}件）`);
+      document.getElementById('gist-modal').classList.remove('active');
+    }
+  } catch(e) {
+    showLoading(false);
+    alert('ダウンロード失敗:\n' + e.message);
+  }
+}
+
+// 自動同期（起動時にダウンロード、変更時にアップロード - 任意機能として追加）
+let _gistAutoSyncTimer;
+function scheduleGistAutoUpload() {
+  const s = loadGistSettings();
+  if (!s.token || !s.gistId || !s.autoSync) return;
+  clearTimeout(_gistAutoSyncTimer);
+  _gistAutoSyncTimer = setTimeout(() => gistPush().catch(() => {}), 30000);
+}
+
 async function showQRShare() {
   const compressed = compressData(appData);
 
@@ -3734,13 +3906,6 @@ document.addEventListener('keydown', e => {
 document.getElementById('add-modal').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeModal();
 });
-
-// ===== PWA Service Worker 登録 =====
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./sw.js').catch(e => console.log('SW registration failed:', e));
-  });
-}
 </script>
 </body>
 </html>
