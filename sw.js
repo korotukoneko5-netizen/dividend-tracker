@@ -1,5 +1,5 @@
 // Service Worker for 高配当株トラッカー
-const CACHE_NAME = 'dividend-tracker-v1';
+const CACHE_NAME = 'dividend-tracker-v2';
 const URLS_TO_CACHE = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', event => {
@@ -19,14 +19,29 @@ self.addEventListener('activate', event => {
 });
 
 self.addEventListener('fetch', event => {
-  // APIリクエストはキャッシュせず、ネットワーク優先
   const url = event.request.url;
-  if (url.includes('yahoo.com') || url.includes('corsproxy') || url.includes('allorigins') || url.includes('codetabs') || url.includes('yanoshin')) {
+
+  // APIリクエストはキャッシュせず、ネットワーク優先
+  if (url.includes('yahoo.com') || url.includes('corsproxy') || url.includes('allorigins') || url.includes('codetabs') || url.includes('yanoshin') || url.includes('githubusercontent') || url.includes('api.github.com')) {
     event.respondWith(fetch(event.request).catch(() => new Response('', { status: 503 })));
     return;
   }
 
-  // 静的ファイルはキャッシュ優先
+  // HTML/JSON/JS はネットワーク優先（常に最新版を取得）
+  if (url.endsWith('.html') || url.endsWith('.json') || url.endsWith('.js') || url.endsWith('/')) {
+    event.respondWith(
+      fetch(event.request).then(resp => {
+        if (resp && resp.status === 200) {
+          const clone = resp.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        }
+        return resp;
+      }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // それ以外（画像など）はキャッシュ優先
   event.respondWith(
     caches.match(event.request).then(cached => cached || fetch(event.request).then(resp => {
       if (resp && resp.status === 200 && event.request.method === 'GET') {
