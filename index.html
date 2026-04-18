@@ -1577,7 +1577,17 @@ function getSectorLabel(item) {
 // 東証業種→景気感応度マップ
 // 銘柄コード別の業種オーバーライド
 const STOCK_GYOSHU = {
+  // 日本REITs/ETF
   '1343':'ETF・他','3269':'ETF・他',
+  // 米国ETF (高配当系)
+  'VYM':'米国ETF','HDV':'米国ETF','SPYD':'米国ETF','SCHD':'米国ETF','DVY':'米国ETF',
+  'VIG':'米国ETF','SDY':'米国ETF','DGRO':'米国ETF','NOBL':'米国ETF','FDL':'米国ETF',
+  'DHS':'米国ETF','RDVY':'米国ETF','PEY':'米国ETF','DGRW':'米国ETF','HDIV':'米国ETF',
+  // 米国ETF (配当+グロース系)
+  'VTI':'米国ETF','VOO':'米国ETF','SPY':'米国ETF','QQQ':'米国ETF','IVV':'米国ETF',
+  'VT':'米国ETF','VEA':'米国ETF','VWO':'米国ETF','AGG':'米国ETF','BND':'米国ETF',
+  'JEPI':'米国ETF','JEPQ':'米国ETF','XYLD':'米国ETF','QYLD':'米国ETF','RYLD':'米国ETF',
+  'PFF':'米国ETF','VNQ':'米国ETF','TLT':'米国ETF','LQD':'米国ETF','HYG':'米国ETF',
   '1414':'建設業','1721':'建設業','1736':'建設業','1828':'建設業','1911':'建設業',
   '1925':'建設業','1926':'建設業','1928':'建設業','1951':'建設業','1980':'建設業',
   '2002':'食料品','2003':'食料品','2114':'食料品','2296':'食料品','2502':'食料品',
@@ -3034,12 +3044,22 @@ function parseMFInput() {
     }
     if (cells.length < 4) continue;
 
-    // 最初のセルが4桁コードかチェック
+    // 最初のセルが銘柄コードかチェック（日本4桁 or 米国1-5文字英字）
     const codeCell = cells[0];
-    if (!/^\d{4}$/.test(codeCell)) continue;
-    const code = codeCell;
-    const num = parseInt(code);
-    if (num < 1300 || num > 9999) continue;
+    let code = '', market = '', ticker = '';
+    if (/^\d{4}$/.test(codeCell)) {
+      const num = parseInt(codeCell);
+      if (num < 1300 || num > 9999) continue;
+      code = codeCell;
+      market = 'JP';
+      ticker = code + '.T';
+    } else if (/^[A-Z]{1,5}$/.test(codeCell)) {
+      code = codeCell;
+      market = 'US';
+      ticker = code;
+    } else {
+      continue;
+    }
 
     // 銘柄名（2番目のセル）
     const name = cells[1] || '';
@@ -3047,7 +3067,7 @@ function parseMFInput() {
     // 保有数・取得単価を探す（数値セルを順番に）
     const numericCells = [];
     for (let i = 2; i < cells.length; i++) {
-      const val = cells[i].replace(/,/g, '').replace(/円/g, '').replace(/%/g, '').trim();
+      const val = cells[i].replace(/,/g, '').replace(/円|ドル|\$|%/g, '').trim();
       if (/^[+\-]?[\d.]+$/.test(val)) {
         numericCells.push(parseFloat(val));
       }
@@ -3060,14 +3080,13 @@ function parseMFInput() {
 
     if (shares <= 0 || costBasis <= 0) continue;
 
-    const ticker = code + '.T';
     const existing = mfParsedItems.find(i => i.ticker === ticker);
     if (existing) continue;
 
     mfParsedItems.push({
       ticker,
       code,
-      market: 'JP',
+      market,
       name,
       shares,
       costBasis,

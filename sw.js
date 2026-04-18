@@ -1,5 +1,5 @@
 // Service Worker for 高配当株トラッカー
-const CACHE_NAME = 'dividend-tracker-v2';
+const CACHE_NAME = 'dividend-tracker-v3';
 const URLS_TO_CACHE = ['./', './index.html', './manifest.json'];
 
 self.addEventListener('install', event => {
